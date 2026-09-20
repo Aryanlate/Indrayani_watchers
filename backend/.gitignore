@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Compiled Output
+dist/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
