@@ -1,10 +1,7 @@
 import type { Metadata } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
-import Navbar from '@/components/Navbar';
-import Footer from '@/components/Footer';
-import BottomTabBar from '@/components/BottomTabBar';
-import AlertToast from '@/components/alerts/AlertToast';
+import SiteShell from '@/components/SiteShell';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -30,25 +27,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`dark ${inter.variable} ${jetbrainsMono.variable}`}>
-      <body className="min-h-screen bg-[#0B1220] text-[#E6EDF7] font-sans antialiased selection:bg-[#22D3EE] selection:text-[#0B1220]">
-        <div className="relative flex min-h-screen flex-col">
-          <Navbar />
-          <main className="flex-1 pb-4 md:pb-0">
-            {children}
-          </main>
-          <Footer />
-          <BottomTabBar />
-          <AlertToast />
-
-          {/* Visually-hidden ARIA live region for critical/warning alert announcements */}
-          <div
-            id="aria-live-alerts"
-            role="status"
-            aria-live="polite"
-            aria-relevant="additions text"
-            className="sr-only"
-          />
-        </div>
+      <body className="min-h-dvh bg-[#0B1220] text-[#E6EDF7] font-sans antialiased selection:bg-[#22D3EE] selection:text-[#0B1220]">
+        <SiteShell>{children}</SiteShell>
       </body>
     </html>
   );

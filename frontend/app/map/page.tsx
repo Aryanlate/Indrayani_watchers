@@ -10,7 +10,7 @@ import { useRiverStore } from '@/lib/store';
 function MapSkeleton() {
   return (
     <div
-      className="relative h-[calc(100vh-64px)] w-full overflow-hidden"
+      className="relative h-full min-h-[480px] w-full overflow-hidden"
       style={{
         background:
           'radial-gradient(ellipse at 30% 40%, #162236 0%, #0E1829 35%, #0B1220 70%, #070C18 100%)',
@@ -69,6 +69,7 @@ const RiverMap = dynamic(() => import('@/components/map/RiverMap'), {
 export default function MapPage() {
   const [mapError, setMapError] = useState<string | null>(null);
   const [mapRetryKey, setMapRetryKey] = useState<number>(0);
+  const mapErrorLockRef = React.useRef<number>(0);
 
   const handleRetry = () => {
     setMapError(null);
@@ -76,32 +77,60 @@ export default function MapPage() {
   };
 
   useEffect(() => {
+    let cancelled = false;
+
     const handleError = (event: ErrorEvent) => {
-      if (
-        event.message &&
-        (event.message.toLowerCase().includes('maplibre') ||
-          event.message.toLowerCase().includes('webgl') ||
-          event.message.toLowerCase().includes('map'))
-      ) {
-        setMapError(event.message);
-      }
+      if (cancelled) return;
+      const msg = typeof event.message === 'string' ? event.message : '';
+      const lower = msg.toLowerCase();
+
+      const isFatalMapInitError =
+        lower.includes('webgl context') ||
+        lower.includes('could not create maplibre') ||
+        lower.includes('maplibregl is not defined') ||
+        lower.includes('failed to initialize webgl') ||
+        lower.includes('instantiated maplibregl.map') ||
+        /maplibre.*(syntax|type|load)error/.test(lower) ||
+        /failed to load module script/.test(lower) ||
+        /blocked a frame|cross-origin.*maplibre/.test(lower);
+
+      if (!isFatalMapInitError) return;
+
+      const now = Date.now();
+      if (now - mapErrorLockRef.current < 5000) return; // throttle: max 1 per 5s
+      mapErrorLockRef.current = now;
+      setMapError(msg);
     };
+
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-      const reason = event.reason?.message || String(event.reason);
-      if (
-        reason &&
-        (reason.toLowerCase().includes('maplibre') ||
-          reason.toLowerCase().includes('webgl') ||
-          reason.toLowerCase().includes('map'))
-      ) {
-        setMapError(reason);
-      }
+      if (cancelled) return;
+      const reason =
+        (event.reason && typeof event.reason === 'object' && 'message' in event.reason
+          ? String((event.reason as { message?: unknown }).message ?? '')
+          : String(event.reason ?? '')) || '';
+      const lower = reason.toLowerCase();
+
+      const isFatalMapInitError =
+        lower.includes('webgl context') ||
+        lower.includes('could not create maplibre') ||
+        lower.includes('maplibregl is not defined') ||
+        lower.includes('failed to initialize webgl') ||
+        lower.includes('instantiated maplibregl.map') ||
+        /maplibre.*(syntax|type|load)error/.test(lower);
+
+      if (!isFatalMapInitError) return;
+
+      const now = Date.now();
+      if (now - mapErrorLockRef.current < 5000) return;
+      mapErrorLockRef.current = now;
+      setMapError(reason);
     };
 
     window.addEventListener('error', handleError);
     window.addEventListener('unhandledrejection', handleUnhandledRejection);
 
     return () => {
+      cancelled = true;
       window.removeEventListener('error', handleError);
       window.removeEventListener('unhandledrejection', handleUnhandledRejection);
     };
@@ -117,6 +146,48 @@ export default function MapPage() {
     return initial;
   });
 
+  function recordsShallowEqual(
+    a: Record<string, Reading>,
+    b: Record<string, Reading>
+  ): boolean {
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+    if (keysA.length !== keysB.length) return false;
+    for (const k of keysA) {
+      if (a[k] !== b[k]) return false;
+    }
+    return true;
+  }
+
+  function readingsDeeplyEqual(
+    a: Record<string, Reading>,
+    b: Record<string, Reading>
+  ): boolean {
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+    if (keysA.length !== keysB.length) return false;
+    for (const k of keysA) {
+      const ra = a[k];
+      const rb = b[k];
+      if (ra === rb) continue;
+      if (!ra || !rb) return false;
+      if (
+        ra.wqi !== rb.wqi ||
+        ra.do !== rb.do ||
+        ra.ph !== rb.ph ||
+        ra.turbidity !== rb.turbidity ||
+        ra.tds !== rb.tds ||
+        ra.conductivity !== rb.conductivity ||
+        ra.status !== rb.status ||
+        ra.isOnline !== rb.isOnline ||
+        ra.timestamp !== rb.timestamp
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   // Connect to backend Realtime SSE stream on mount
   useEffect(() => {
     apiClient.connectStream();
@@ -129,22 +200,29 @@ export default function MapPage() {
   // Sync with Zustand store updates if backend broadcasts new readings
   const zustandReadings = useRiverStore((s) => s.latestReadings);
   useEffect(() => {
-    if (Object.keys(zustandReadings).length > 0) {
-      setReadings((prev) => ({
-        ...prev,
-        ...zustandReadings,
-      }));
-    }
+    if (Object.keys(zustandReadings).length === 0) return;
+    setReadings((prev) => {
+      const merged = { ...prev, ...zustandReadings };
+      if (recordsShallowEqual(prev, merged) || readingsDeeplyEqual(prev, merged)) {
+        return prev;
+      }
+      return merged;
+    });
   }, [zustandReadings]);
 
-  // Poll getLiveReading() every 3 seconds for all stations
+  // Poll getLiveReading() every 3 seconds for all stations, but only write a new
+  // readings Record when at least one reading's numeric/status fields actually changed.
+  // This prevents thousands of spurious RiverMap re-renders per minute from polling.
   useEffect(() => {
     const interval = setInterval(() => {
-      const nextReadings: Record<string, Reading> = {};
-      for (const s of STATIONS) {
-        nextReadings[s.id] = getLiveReading(s.id);
-      }
-      setReadings(nextReadings);
+      setReadings((prev) => {
+        const nextReadings: Record<string, Reading> = {};
+        for (const s of STATIONS) {
+          nextReadings[s.id] = getLiveReading(s.id);
+        }
+        if (readingsDeeplyEqual(prev, nextReadings)) return prev;
+        return nextReadings;
+      });
     }, 3000);
 
     return () => clearInterval(interval);
@@ -153,7 +231,7 @@ export default function MapPage() {
   return (
     <main
       aria-labelledby="indrayani-map-page-title"
-      className="relative w-full h-[calc(100vh-64px)] overflow-hidden bg-[#0B1220]"
+      className="relative h-full min-h-0 w-full overflow-hidden bg-[#0B1220]"
     >
       <h1 id="indrayani-map-page-title" className="sr-only">
         Indrayani River Telemetry Map
