@@ -427,7 +427,7 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
     console.log('[DEBUG-MAP] 1. Container computed:', diagnostics.containerComputed);
     console.log('[DEBUG-MAP] 1. Parent hierarchy:', diagnostics.parentHierarchy);
 
-    const map = new maplibregl.Map({
+    const map = new MapLibreMap({
       container: mapContainerRef.current,
       style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [73.850, 18.680],
@@ -563,7 +563,12 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
 
     mapRef.current = map;
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+    map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right');
+    requestAnimationFrame(() => {
+      if (!cancelled && mapRef.current === map) {
+        map.resize();
+      }
+    });
 
     const handleLoad = () => {
       if (cancelled || handleLoadRan) return;
@@ -591,7 +596,7 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
             'line-width': 16,
             'line-blur': 10,
             'line-opacity': 0.45,
-            'line-gradient': buildLineGradientExpression() as unknown as maplibregl.ExpressionSpecification,
+            'line-gradient': buildLineGradientExpression() as unknown as ExpressionSpecification,
           },
         });
       }
@@ -607,7 +612,7 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
           },
           paint: {
             'line-width': 7,
-            'line-gradient': buildLineGradientExpression() as unknown as maplibregl.ExpressionSpecification,
+            'line-gradient': buildLineGradientExpression() as unknown as ExpressionSpecification,
           },
         });
       }
@@ -729,11 +734,11 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
   return (
     <div
       id="indrayani-river-map"
-      className="relative w-full h-[calc(100vh-64px)] overflow-hidden bg-[#0B1220]"
+      className="relative h-full min-h-0 w-full overflow-hidden bg-[#0B1220]"
       aria-label="Indrayani River monitoring map. Use arrow keys to pan, + / - to zoom, Tab to focus station markers."
     >
       {/* MapLibre WebGL Canvas Container */}
-      <div ref={mapContainerRef} className="w-full h-full" />
+      <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
       <pre id="debug-map-pre" className="hidden" />
 
       {/* Floating Overlay Controls (Top-Left) */}

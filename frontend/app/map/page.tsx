@@ -229,7 +229,7 @@ export default function MapPage() {
   }, []);
 
   return (
-    <main
+    <div
       aria-labelledby="indrayani-map-page-title"
       className="relative h-full min-h-0 w-full overflow-hidden bg-[#0B1220]"
     >
@@ -294,6 +294,6 @@ export default function MapPage() {
       ) : (
         <RiverMap key={mapRetryKey} stations={STATIONS} liveReadings={readings} />
       )}
-    </main>
+    </div>
   );
 }
