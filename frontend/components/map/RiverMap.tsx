@@ -321,52 +321,28 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
       map.setLayoutProperty('river-flow-line', 'visibility', 'visible');
     }
 
-    const duration = 1500;
+    // MapLibre 6 compiles dasharray into a GPU atlas. Mutating line-dasharray
+    // every frame throws `Cannot read properties of null (reading 'y')` and
+    // stalls the render loop (no markers, Next.js error overlay). Pulse opacity instead.
+    const duration = 1800;
     const startTime = performance.now();
-    let frameCounter = 0;
 
     stopFlowAnimation();
 
-    if (isLowEndDeviceRef.current) {
-      intervalRef.current = setInterval(() => {
-        const now = performance.now();
-        const elapsed = (now - startTime) % duration;
-        const progress = elapsed / duration;
-
-        const dash = 2;
-        const gap = 2;
-        const d1 = Math.max(0.01, progress * 4);
-        const g1 = Math.max(0.01, (1 - progress) * 4);
-
-        if (mapRef.current && mapRef.current.getLayer('river-flow-line')) {
-          mapRef.current.setPaintProperty('river-flow-line', 'line-dasharray', [d1, dash, g1, gap]);
+    const animateFlow = (now: number) => {
+      const t = ((now - startTime) % duration) / duration;
+      const opacity = 0.35 + 0.5 * Math.abs(Math.sin(t * Math.PI));
+      if (mapRef.current?.getLayer('river-flow-line')) {
+        try {
+          mapRef.current.setPaintProperty('river-flow-line', 'line-opacity', opacity);
+        } catch {
+          /* layer may have been removed during teardown */
         }
-      }, 33);
-    } else {
-      const animateDash = (now: number) => {
-        const elapsed = (now - startTime) % duration;
-        const progress = elapsed / duration;
+      }
+      animationFrameRef.current = requestAnimationFrame(animateFlow);
+    };
 
-        frameCounter++;
-        if (frameCounter % 2 === 0 && isLowEndDeviceRef.current) {
-          animationFrameRef.current = requestAnimationFrame(animateDash);
-          return;
-        }
-
-        const dash = 2;
-        const gap = 2;
-        const d1 = Math.max(0.01, progress * 4);
-        const g1 = Math.max(0.01, (1 - progress) * 4);
-
-        if (mapRef.current && mapRef.current.getLayer('river-flow-line')) {
-          mapRef.current.setPaintProperty('river-flow-line', 'line-dasharray', [d1, dash, g1, gap]);
-        }
-
-        animationFrameRef.current = requestAnimationFrame(animateDash);
-      };
-
-      animationFrameRef.current = requestAnimationFrame(animateDash);
-    }
+    animationFrameRef.current = requestAnimationFrame(animateFlow);
   }
 
   // 1. Initialize MapLibre GL Map once on mount (empty deps — Strict-Mode safe)
@@ -377,266 +353,111 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
 
     let cancelled = false;
     let handleLoadRan = false;
-
-    // DIAGNOSTIC CHECK 1: CONTAINER & PARENTS HIERARCHY
     const containerEl = mapContainerRef.current;
-    const rect = containerEl.getBoundingClientRect();
-    const computedStyle = window.getComputedStyle(containerEl);
-
-    // Walk up DOM parents
-    const parentHierarchy: Array<{ tag: string; id: string; className: string; rect: DOMRect; computedHeight: string; computedWidth: string }> = [];
-    let curr: HTMLElement | null = containerEl.parentElement;
-    while (curr && curr !== document.body) {
-      const pRect = curr.getBoundingClientRect();
-      const pStyle = window.getComputedStyle(curr);
-      parentHierarchy.push({
-        tag: curr.tagName.toLowerCase(),
-        id: curr.id || '',
-        className: curr.className || '',
-        rect: pRect,
-        computedHeight: pStyle.height,
-        computedWidth: pStyle.width,
-      });
-      curr = curr.parentElement;
-    }
-
-    const diagnostics: {
-      containerRect: { width: number; height: number; top: number; left: number };
-      containerComputed: { width: string; height: string; display: string };
-      parentHierarchy: typeof parentHierarchy;
-      errors: any[];
-      sourcedataEvents: any[];
-      styledataEvents: any[];
-      loadFired: boolean;
-      canvasInfo: any;
-      resources: any[];
-    } = {
-      containerRect: { width: rect.width, height: rect.height, top: rect.top, left: rect.left },
-      containerComputed: { width: computedStyle.width, height: computedStyle.height, display: computedStyle.display },
-      parentHierarchy,
-      errors: [],
-      sourcedataEvents: [],
-      styledataEvents: [],
-      loadFired: false,
-      canvasInfo: null,
-      resources: [],
-    };
-    (window as any).__MAP_DIAGNOSTICS__ = diagnostics;
-
-    console.log('[DEBUG-MAP] 1. Container rect:', diagnostics.containerRect);
-    console.log('[DEBUG-MAP] 1. Container computed:', diagnostics.containerComputed);
-    console.log('[DEBUG-MAP] 1. Parent hierarchy:', diagnostics.parentHierarchy);
 
     const map = new MapLibreMap({
-      container: mapContainerRef.current,
+      container: containerEl,
       style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [73.850, 18.680],
       zoom: 11.2,
       minZoom: 9,
       maxZoom: 17,
       pitch: 15,
-    });
-
-    window.addEventListener('unhandledrejection', (e) => {
-      console.error('[DEBUG-MAP] Unhandled rejection:', e.reason);
-      diagnostics.errors.push({ type: 'unhandledrejection', reason: String(e.reason?.stack || e.reason) });
-    });
-    window.addEventListener('error', (e) => {
-      console.error('[DEBUG-MAP] Window error:', e.error || e.message);
-      diagnostics.errors.push({ type: 'window_error', message: e.message, error: String(e.error?.stack || e.error) });
-    });
-
-    map.on('sourcedata', (e) => {
-      const entry = {
-        sourceId: e.sourceId,
-        isSourceLoaded: e.isSourceLoaded,
-        dataType: e.dataType,
-        sourceDataType: (e as any).sourceDataType,
-      };
-      diagnostics.sourcedataEvents.push(entry);
-      console.log('[DEBUG-MAP] 2. sourcedata:', entry);
+      trackResize: true,
     });
 
     map.on('error', (e) => {
-      const errDetail = {
-        message: e.error?.message || (e as any).message || String(e.error || e),
-        status: (e.error as any)?.status,
-        url: (e.error as any)?.url,
-        stack: e.error?.stack,
-      };
-      diagnostics.errors.push(errDetail);
-      console.error('[DEBUG-MAP] 2. error event:', errDetail);
-    });
-
-    const dumpDiagnostics = () => {
-      const el = document.getElementById('debug-map-pre');
-      if (el) {
-        try {
-          const style = map.getStyle();
-          const resources = performance.getEntriesByType('resource')
-            .filter(r => r.name.includes('openfreemap') || r.name.includes('liberty') || r.name.includes('pbf') || r.name.includes('planet'))
-            .map(r => ({ name: r.name, status: (r as any).responseStatus, duration: Math.round(r.duration), transferSize: r.transferSize }));
-
-          const omt = map.getSource('openmaptiles') as any;
-          const openmaptilesDetails = omt ? {
-            _loaded: omt._loaded,
-            tiles: omt.tiles,
-            minzoom: omt.minzoom,
-            maxzoom: omt.maxzoom,
-            hasTileJSONRequest: Boolean(omt._tileJSONRequest),
-            loadedFn: typeof omt.loaded === 'function' ? omt.loaded() : undefined,
-            type: omt.type,
-          } : null;
-
-          const styleInternal = (map as any).style;
-          const omtTileManager = styleInternal?.tileManagers ? styleInternal.tileManagers['openmaptiles'] : null;
-          const omtTmFields = omtTileManager ? {
-            _sourceLoaded: omtTileManager._sourceLoaded,
-            _sourceErrored: omtTileManager._sourceErrored,
-            _updated: omtTileManager._updated,
-            _paused: omtTileManager._paused,
-            used: omtTileManager.used,
-            usedForTerrain: omtTileManager.usedForTerrain,
-            tilesCount: omtTileManager._inViewTiles?.getAllTiles?.()?.length,
-            tiles: omtTileManager._inViewTiles?.getAllTiles?.()?.map((t: any) => ({ id: t.tileID?.key, state: t.state })),
-            hasTransform: Boolean(omtTileManager.transform),
-            transformWidth: omtTileManager.transform?.width,
-            transformHeight: omtTileManager.transform?.height,
-          } : null;
-          const tileManagersLoaded: Record<string, boolean> = {};
-          if (styleInternal?.tileManagers) {
-            for (const id in styleInternal.tileManagers) {
-              tileManagersLoaded[id] = typeof styleInternal.tileManagers[id]?.loaded === 'function'
-                ? styleInternal.tileManagers[id].loaded()
-                : false;
-            }
-          }
-
-          const debugCheck = {
-            style_loaded: styleInternal?._loaded,
-            updatedSources: styleInternal?._updatedSources ? Object.keys(styleInternal._updatedSources) : null,
-            tileManagersLoaded,
-            imageManagerLoaded: styleInternal?.imageManager?.isLoaded ? styleInternal.imageManager.isLoaded() : null,
-            transformWidth: (map as any).transform?.width,
-            transformHeight: (map as any).transform?.height,
-            zoom: map.getZoom(),
-            center: map.getCenter(),
-          };
-
-          el.textContent = JSON.stringify({
-            debugCheck,
-            omtTmFields,
-            containerRect: diagnostics.containerRect,
-            containerComputed: diagnostics.containerComputed,
-            parentHierarchy: diagnostics.parentHierarchy,
-            isStyleLoaded: map.isStyleLoaded(),
-            mapLoaded: map.loaded(),
-            style_loaded_internal: (map as any).style?._loaded,
-            styleSources: style ? Object.keys(style.sources) : null,
-            openmaptilesDetails,
-            openmaptilesSource: style?.sources ? (style.sources as any)['openmaptiles'] : null,
-            sourcedataCount: diagnostics.sourcedataEvents.length,
-            sourcedataLast5: diagnostics.sourcedataEvents.slice(-5),
-            errors: diagnostics.errors,
-            canvas: map.getCanvas() ? {
-              width: map.getCanvas().width,
-              height: map.getCanvas().height,
-              styleWidth: map.getCanvas().style.width,
-              styleHeight: map.getCanvas().style.height,
-              clientWidth: map.getCanvas().clientWidth,
-              clientHeight: map.getCanvas().clientHeight,
-            } : null,
-            resources,
-          }, null, 2);
-        } catch (e: any) {
-          el.textContent = 'Error dumping diagnostics: ' + e.message;
-        }
+      const message = e.error?.message || String(e.error || e);
+      if (/failed to fetch|networkerror|load failed|404/i.test(message)) {
+        console.warn('[MapLibre] tile/style request failed:', message);
+        return;
       }
-    };
-
-    const diagInterval = setInterval(dumpDiagnostics, 500);
-
-    map.on('load', () => {
-      diagnostics.loadFired = true;
-      console.log('[DEBUG-MAP] load event fired! map.isStyleLoaded():', map.isStyleLoaded());
+      console.error('[MapLibre] error:', message);
     });
 
     mapRef.current = map;
-
     map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right');
-    requestAnimationFrame(() => {
+
+    const resizeMap = () => {
       if (!cancelled && mapRef.current === map) {
         map.resize();
       }
-    });
+    };
+    requestAnimationFrame(resizeMap);
+    const resizeObserver = new ResizeObserver(resizeMap);
+    resizeObserver.observe(containerEl);
 
     const handleLoad = () => {
       if (cancelled || handleLoadRan) return;
       handleLoadRan = true;
       styleLoadedRef.current = true;
 
-      if (!map.getSource('indrayani-river-source')) {
-        map.addSource('indrayani-river-source', {
-          type: 'geojson',
-          data: getRiverGeoJSON(),
-          lineMetrics: true,
-        });
-      }
+      try {
+        if (!map.getSource('indrayani-river-source')) {
+          map.addSource('indrayani-river-source', {
+            type: 'geojson',
+            data: getRiverGeoJSON(),
+            lineMetrics: true,
+          });
+        }
 
-      if (!map.getLayer('river-outer-glow')) {
-        map.addLayer({
-          id: 'river-outer-glow',
-          type: 'line',
-          source: 'indrayani-river-source',
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round',
-          },
-          paint: {
-            'line-width': 16,
-            'line-blur': 10,
-            'line-opacity': 0.45,
-            'line-gradient': buildLineGradientExpression() as unknown as ExpressionSpecification,
-          },
-        });
-      }
+        if (!map.getLayer('river-outer-glow')) {
+          map.addLayer({
+            id: 'river-outer-glow',
+            type: 'line',
+            source: 'indrayani-river-source',
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round',
+            },
+            paint: {
+              'line-width': 16,
+              'line-blur': 10,
+              'line-opacity': 0.45,
+              'line-gradient': buildLineGradientExpression() as unknown as ExpressionSpecification,
+            },
+          });
+        }
 
-      if (!map.getLayer('river-main-line')) {
-        map.addLayer({
-          id: 'river-main-line',
-          type: 'line',
-          source: 'indrayani-river-source',
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round',
-          },
-          paint: {
-            'line-width': 7,
-            'line-gradient': buildLineGradientExpression() as unknown as ExpressionSpecification,
-          },
-        });
-      }
+        if (!map.getLayer('river-main-line')) {
+          map.addLayer({
+            id: 'river-main-line',
+            type: 'line',
+            source: 'indrayani-river-source',
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round',
+            },
+            paint: {
+              'line-width': 7,
+              'line-gradient': buildLineGradientExpression() as unknown as ExpressionSpecification,
+            },
+          });
+        }
 
-      if (!map.getLayer('river-flow-line')) {
-        map.addLayer({
-          id: 'river-flow-line',
-          type: 'line',
-          source: 'indrayani-river-source',
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round',
-          },
-          paint: {
-            'line-color': '#22D3EE',
-            'line-width': 2.5,
-            'line-opacity': 0.85,
-            'line-dasharray': [0, 4, 3],
-          },
-        });
-      }
+        if (!map.getLayer('river-flow-line')) {
+          map.addLayer({
+            id: 'river-flow-line',
+            type: 'line',
+            source: 'indrayani-river-source',
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round',
+            },
+            paint: {
+              'line-color': '#22D3EE',
+              'line-width': 2.5,
+              'line-opacity': 0.85,
+            },
+          });
+        }
 
-      updateAllMarkers();
-      startFlowAnimation();
+        map.resize();
+        updateAllMarkers();
+        startFlowAnimation();
+      } catch (err) {
+        console.error('[MapLibre] Failed to add river overlay:', err);
+      }
     };
 
     const onStyleDataFallback = () => {
@@ -667,7 +488,7 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
 
     return () => {
       cancelled = true;
-      clearInterval(diagInterval);
+      resizeObserver.disconnect();
       window.clearTimeout(fallbackTimeout);
       try {
         map.off('styledata', onStyleDataFallback);
@@ -675,6 +496,14 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
         /* no-op */
       }
       stopFlowAnimation();
+      Object.values(markersRef.current).forEach((marker) => {
+        try {
+          marker.remove();
+        } catch {
+          /* ignore */
+        }
+      });
+      markersRef.current = {};
       try {
         map.remove();
       } catch {
@@ -739,7 +568,6 @@ export default function RiverMap({ stations, liveReadings }: RiverMapProps) {
     >
       {/* MapLibre WebGL Canvas Container */}
       <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
-      <pre id="debug-map-pre" className="hidden" />
 
       {/* Floating Overlay Controls (Top-Left) */}
       <MapOverlayControls
