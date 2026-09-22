@@ -31,11 +31,11 @@
 // =============================================================================
 // 1. Wi-Fi & Backend Credentials
 // =============================================================================
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID     = "Pass";
+const char* WIFI_PASSWORD = "Password@00";
 
 // NOTE: Replace with your PC's LAN IP (e.g. http://192.168.1.100:4000) or deployed public URL
-const char* BACKEND_URL   = "http://192.168.1.100:4000/api/ingest";
+const char* BACKEND_URL   = "http://10.105.51.191:4000/api/health";
 
 // Device and Node Identity
 const char* DEVICE_ID     = "ESP32-S4";                  // e.g. "ESP32-S1" .. "ESP32-S6"
